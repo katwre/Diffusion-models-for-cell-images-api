@@ -1,0 +1,47 @@
+# GPU-enabled Dockerfile (NVIDIA CUDA + PyTorch CUDA)
+# Base: CUDA 12.1 runtime with cuDNN on Ubuntu 22.04
+FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/src \
+    PIP_NO_CACHE_DIR=1
+
+# System deps for Python, Pillow, and build tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    python3-venv \
+    build-essential \
+    libjpeg-dev \
+    zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Symlink python
+RUN ln -sf /usr/bin/python3 /usr/bin/python && \
+    ln -sf /usr/bin/pip3 /usr/bin/pip
+
+# Work from root
+WORKDIR /
+
+# Copy project
+COPY . /
+
+# Copy only the required checkpoint
+COPY checkpoints/phase2_inpaint_unet.pt /checkpoints/phase2_inpaint_unet.pt
+
+# Install Python deps (Streamlit UI + CUDA-enabled Torch)
+# Use CUDA 12.1 wheels from PyTorch index
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install -U streamlit streamlit-drawable-canvas-fix numpy pillow boto3 && \
+    pip install --extra-index-url https://download.pytorch.org/whl/cu121 torch torchvision
+
+# Expose Streamlit default port
+EXPOSE 8501
+
+# Streamlit config
+ENV STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+
+# Default command
+CMD ["streamlit", "run", "/app/app.py", "--server.port=8501", "--server.address=0.0.0.0"]
