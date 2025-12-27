@@ -4,20 +4,16 @@
 <p align="center">
   <img src="img/merged.gif" width="720">
 </p>
-  <figcaption align="center"><b>Figure.</b> Interactive diffusion-based inpainting results on an H&amp;E image of a monocyte, illustrating reconstruction of masked regions while preserving the observed context.</figcaption>
+  <figcaption align="center"><b>Figure.</b> Interactive diffusion-based inpainting results on an H&E image of a monocyte, illustrating reconstruction of masked regions while preserving the observed context.</figcaption>
 </figure>
 </br></br>
 
 -----------------------------
 
-Restore missing or corrupted regions in microscopy images using a compact diffusion model and an easy Streamlit UI. The aim of this project is to explore the ability of diffusion models to generate missing regions in images.
+The aim of this project is to explore the ability of diffusion models to generate missing regions in images. It restores corrupted areas in H&E cell images using a compact diffusion model and a simple Streamlit UI. 
 
-Recognizing blood cell types in microscopic images is an important task in clinical diagnostics. Although this problem has been studied for decades, new machine learning and deep learning approaches continue to improve classification accuracy ([Acevedo et al. (2019)](https://www.sciencedirect.com/science/article/abs/pii/S0169260719303578?via%3Dihub) and [Deltadahl et al. (2025)](https://www.nature.com/articles/s42256-025-01122-7)).
+Recognizing blood cell types in microscopic images is central to clinical diagnostics. While the task has been studied for decades, recent machine learning and deep learning methods continue to improve accuracy ([Acevedo et al., 2019](https://www.sciencedirect.com/science/article/abs/pii/S0169260719303578?via%3Dihub); [Deltadahl et al., 2025](https://www.nature.com/articles/s42256-025-01122-7)). Rather than classifying immune cells, this project applies diffusion-based inpainting—with a linear noise schedule and standard ε-prediction—to restore user-marked regions of H&E images. The training data comprises 17,092 expert-annotated single-cell H&E images (JPG, 360×363 px) captured with the CellaVision DM96 and published by [Acevedo et al., 2019](https://www.sciencedirect.com/science/article/abs/pii/S0169260719303578?via%3Dihub) (URL: https://data.mendeley.com/datasets/snkd93bnjr/1). Classes include neutrophils, eosinophils, basophils, lymphocytes, monocytes, immature granulocytes, erythroblasts, and platelets. H&E staining combines hematoxylin (nuclei, purplish blue) and eosin (cytoplasm/extracellular matrix, pink).
 
-Dataset
-- Source: Mendeley Data - [Acevedo et al., 2019](https://www.sciencedirect.com/science/article/abs/pii/S0169260719303578?via%3Dihub)
-- URL: https://data.mendeley.com/datasets/snkd93bnjr/1
-- Summary: 17,092 expert-annotated single-cell H&E images (JPG, 360×363 px) captured with the CellaVision DM96. Classes include neutrophils, eosinophils, basophils, lymphocytes, monocytes, immature granulocytes, erythroblasts, and platelets. H&E staining combines hematoxylin (nuclei, purplish blue) and eosin (cytoplasm/extracellular matrix, pink).
 
 If you're interested in other diffusion-based generative methods on H&E images, check out a model called [CytoDiffusion](https://www.nature.com/articles/s42256-025-01122-7) by Deltadahl et al, Nature Machine Intelligence 2025. It's is a newly published diffusion-based model designed specifically for blood cell morphology analysis. Instead of being a traditional classifier that only learns boundaries between labeled categories, it models the full distribution of blood cell appearances using generative diffusion techniques.
 
@@ -93,7 +89,7 @@ Results analysis can be found in `notebooks/02_Inpainting_Diffusion.ipynb`.
 
 <figure>
 <p align="center">
-  <img src="img/phase2_1.png" width="500" />
+  <img src="img/phase2.png" width="500" />
 </p>
   <figcaption align="center"><b>Figure.</b> Diffusion-based inpainting results. The model reconstructs masked regions while preserving the observed context.</figcaption>
 </figure>
