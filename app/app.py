@@ -124,6 +124,7 @@ st.download_button(
 )
 
 # Add primary Run button directly under the canvas
+st.subheader("Step 3: Run inpainting")
 run = st.button("Run inpainting")
 
 # If user clicked run, this is where you'd trigger inference
@@ -185,7 +186,8 @@ if run:
 
 # On every rerun, display stored result if present (single image) and provide download
 if "result_png_bytes" in st.session_state:
-    st.caption("Inpainted result (composited to original size)")
+    st.subheader("Step 4: Get the result image!")
+    st.caption("Inpainted result")
     st.image(st.session_state["result_png_bytes"], width=st.session_state.get("result_width", None), use_container_width=False)
     st.download_button(
         "Download inpainted composite (PNG)",
