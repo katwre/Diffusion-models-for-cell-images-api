@@ -108,7 +108,7 @@ Possible extensions include:
 
 ----
 
-### Deployment
+# Deployment
 
 Demo inference: upload an image + mask -> run inpainting sampling -> show result
 
@@ -118,7 +118,7 @@ My steps:
 - an inference function that loads the trained inpainting DDPM and runs clamped sampling with the mask
 
 
-#### Locally (using CPUs)
+#### Locally
 
 Run locally:
 - Pipenv
