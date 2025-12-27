@@ -62,8 +62,8 @@ with st.sidebar:
     brush_size = st.slider("Brush size", min_value=2, max_value=64, value=16)
     brush_opacity = st.slider("Brush opacity", min_value=0.05, max_value=1.0, value=0.45)
     steps = st.number_input("Diffusion steps (T)", min_value=50, max_value=2000, value=1000, step=50)
-    beta_start = st.number_input("beta_start", min_value=1e-6, max_value=1e-2, value=1e-4, format="%.6f")
-    beta_end = st.number_input("beta_end", min_value=1e-4, max_value=1e-1, value=2e-2, format="%.6f")
+    beta_start = st.number_input("Min. noise level (beta_start)", min_value=1e-6, max_value=1e-2, value=1e-4, format="%.6f")
+    beta_end = st.number_input("Max. noise level (beta_end)", min_value=1e-4, max_value=1e-1, value=2e-2, format="%.6f")
 
 # Right column: upload + brushable image
 right = st.columns([1])[0]
@@ -85,7 +85,7 @@ with right:
 
     # Draw directly over the uploaded image using it as the canvas background
     st.subheader("Step 2: Draw mask - paint the region to inpaint")
-    st.caption("Mask convention: painted area = missing (=1), unpainted = known (=0).")
+    st.caption("Mask convention: painted area = missing, unpainted = known.")
     canvas = st_canvas(
         fill_color=f"rgba(255, 255, 255, {brush_opacity})",
         stroke_width=brush_size,
@@ -140,15 +140,12 @@ if run:
     # Broadcast mask to match x0 channels in later ops if needed
     x0_masked_64 = x0_64 * (1.0 - mask_t64)
     preview_64 = model_tensor_to_pil(x0_masked_64)
-    #st.caption("64×64 masked conditioning (preprocessed)")
-    #st.image(preview_64, use_container_width=False)
 
     # Load model
     try:
         model, cfg = load_model(checkpoint_path, device)
     except Exception as e:
         st.error(f"Failed to load checkpoint: {e}")
-        #return
 
     # Build schedule (must match training to be faithful; default matches notebook)
     T = int(steps)
@@ -169,31 +166,32 @@ if run:
             device=device,
         )
 
-        ### Simple display of generated result resized to match displayed image:
-        #out_img = model_tensor_to_pil(x_gen)
-        ## Resize inpainted result to the same size as the displayed image
-        #out_img_resized = out_img.resize((img.width, img.height), resample=Image.Resampling.BILINEAR)
-        #st.caption("Inpainted result")
-        #st.image(out_img_resized, width=img.width, use_container_width=False)
-        ### or composited onto original image size:
-
+        # Compose model output onto original-size image within mask and display just once
         out_img_64 = model_tensor_to_pil(x_gen)
-        # Upscale generated result to match the displayed image size
         out_img_hr = out_img_64.resize((img.width, img.height), resample=Image.Resampling.BILINEAR)
-        # Build high-res binary mask from canvas alpha (True where to replace)
         alpha_hr = Image.fromarray(canvas.image_data.astype(np.uint8)).split()[3]
         mask_hr = (np.array(alpha_hr) > 0)
-        # Composite: replace only masked pixels
         orig_np = np.array(img)
         gen_np = np.array(out_img_hr)
         comp_np = orig_np.copy()
         comp_np[mask_hr] = gen_np[mask_hr]
         comp_img = Image.fromarray(comp_np)
-        st.caption("Inpainted result (composited onto original image size)")
-        st.image(comp_img, width=img.width, use_container_width=False)
-        # Download composite
-        _buf = io.BytesIO()
-        comp_img.save(_buf, format="PNG")
-        st.download_button("Download inpainted composite (PNG)", data=_buf.getvalue(), file_name="inpainted_composite.png", mime="image/png")
+
+    # Persist only the composited result (correct size) and show exactly once
+    _buf = io.BytesIO()
+    comp_img.save(_buf, format="PNG")
+    st.session_state["result_png_bytes"] = _buf.getvalue()
+    st.session_state["result_width"] = img.width
+
+# On every rerun, display stored result if present (single image) and provide download
+if "result_png_bytes" in st.session_state:
+    st.caption("Inpainted result (composited to original size)")
+    st.image(st.session_state["result_png_bytes"], width=st.session_state.get("result_width", None), use_container_width=False)
+    st.download_button(
+        "Download inpainted composite (PNG)",
+        data=st.session_state["result_png_bytes"],
+        file_name="inpainted_composite.png",
+        mime="image/png",
+    )
 
 
