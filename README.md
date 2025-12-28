@@ -31,7 +31,7 @@ If you're interested in other diffusion-based generative methods on H&E images, 
 
 🎨 Streamlit  
 🐳 Docker  
-☁️ AWS Batch (for on‑demand GPU jobs)
+☁️ AWS Batch (on-demand GPU jobs for diffusion model sampling/inference)  
 📦 AWS ECR
 
 
