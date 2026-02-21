@@ -134,67 +134,124 @@ docker run --rm -p 8501:8501 diffusion-inpaint
 ```
 
 
+### AWS Batch
 
-### Run GPU sampling on AWS Batch (on demand)
+First push images to ECR. `Dockerfile` corresponds to UI container (Streamlit) for ECS Fargate (CPU, always on). `Dockerfile.gpu` corresponds to a worker container for AWS Batch (GPU, runs per inference job). Communication between them happens through AWS APIs + S3, not direct container-to-container calls.The reason behind it to make UI stay cheap/always-on (Fargate CPU), and GPU spins up only per request (Batch), so no idle GPU cost. Fargate is just the serverless compute engine that can run tasks for ECS or EKS.
 
-Follow these steps to run the inpainting on GPUs only when needed, while keeping Streamlit on a small CPU instance.
-
-1) Build and push the GPU image to ECR
-- Build locally:
 ```bash
+docker build -f Dockerfile -t diffusion-inpaint-ui .
 docker build -f Dockerfile.gpu -t diffusion-inpaint-gpu .
 ```
-- Create an ECR repo (one-time):
+A quick test of the UI image:
 ```bash
-aws ecr create-repository --repository-name diffusion-inpaint-gpu
-```
-- Log in and push:
-```bash
-aws ecr get-login-password | docker login --username AWS --password-stdin <account>.dkr.ecr.<region>.amazonaws.com
-docker tag diffusion-inpaint-gpu <account>.dkr.ecr.<region>.amazonaws.com/diffusion-inpaint-gpu:latest
-docker push <account>.dkr.ecr.<region>.amazonaws.com/diffusion-inpaint-gpu:latest
+docker run --rm -p 8501:8501 diffusion-inpaint-ui
 ```
 
-2) Create AWS Batch resources
-- IAM roles (one-time):
-  - Batch service role: `AWSBatchServiceRole`
-  - EC2 instance role for the compute environment: allow S3 `GetObject/PutObject` for your bucket
-  - (Optional) Job role: task-level S3 `Get/Put`
-- Compute environment (Managed, EC2):
-  - Type: EC2, On-Demand
-  - Instance types: e.g., `g4dn.xlarge`
-  - vCPU min: 0 (idle cost = 0), vCPU max: 4–8
-  - VPC + subnets + security groups (your defaults work)
-  - Instance role: the EC2 role above
-- Job queue:
-  - Create a queue and attach the compute environment (priority > 0)
-- Job definition (container):
-  - Image: ECR URI (e.g., `<account>.dkr.ecr.<region>.amazonaws.com/diffusion-inpaint-gpu:latest`)
-  - vCPUs: 4, Memory: 8–16 GB
-  - GPUs: 1
-  - Command: `python /src/diffusion_cells/infer_batch.py`
-  - Environment (defaults you can override on submit):
-    - `CHECKPOINT_PATH=/checkpoints/phase2_inpaint_unet.pt`
-    - `STEPS=1000`, `BETA_START=1e-4`, `BETA_END=2e-2` (optional)
-  - Job role: (optional) the IAM role with S3 `Get/Put`
+Push images to a ECR repo:
+```bash
+# Set vars:
+AWS_REGION=eu-west-1
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+GPU_REPO=diffusion-inpaint-gpu
+UI_REPO=diffusion-inpaint-ui
 
-3) Wire Streamlit to Batch (front-end on a small CPU instance)
-- Upload inputs to S3 on button click:
-  - `s3.put_object(Bucket="<bucket>", Key="<key-input>", Body=input_png_bytes)`
-  - `s3.put_object(Bucket="<bucket>", Key="<key-mask>", Body=mask_png_bytes)`
-- Submit the Batch job:
-  - `batch.submit_job(jobName="inpaint-<id>", jobQueue="<queue>", jobDefinition="<job-def>", containerOverrides={"environment": [ {"name":"INPUT_S3_URI","value":"s3://<bucket>/<key-input>"}, {"name":"MASK_S3_URI","value":"s3://<bucket>/<key-mask>"}, {"name":"OUTPUT_S3_URI","value":"s3://<bucket>/<key-output>"}, {"name":"CHECKPOINT_PATH","value":"/checkpoints/phase2_inpaint_unet.pt"} ]})`
-- Poll S3 for the result:
-  - Repeat `s3.head_object(Bucket, Key)` with a short sleep until it exists
-  - Then `s3.get_object(...)` and display the PNG in Streamlit
+# Create repos
+aws ecr create-repository --repository-name "$GPU_REPO" --region "$AWS_REGION"
+aws ecr create-repository --repository-name "$UI_REPO" --region "$AWS_REGION"
 
-4) What the Batch job does (infer_batch.py)
-- Downloads `INPUT_S3_URI` (image) and `MASK_S3_URI` (white=masked region)
-- Runs inpainting at 64×64, composites the prediction back onto the original resolution within the mask
-- Uploads the final PNG to `OUTPUT_S3_URI`
-- (Optional) writes a tiny status JSON if `STATUS_S3_URI` is provided
+# Login Docker to ECR:
+aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
 
-Tips
-- Keep compute environment min vCPUs = 0 to avoid idle GPU costs; GPUs spin up only when a job is queued.
-- Ensure your IAM roles grant S3 `GetObject/PutObject` on your bucket/prefix for both the Streamlit host and Batch jobs.
-- If your EC2 GPU CUDA version differs, adjust `Dockerfile.gpu` to a matching CUDA tag and PyTorch wheels.
+# Tag local images:
+docker tag diffusion-inpaint-gpu:latest "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$GPU_REPO:latest"
+docker tag diffusion-inpaint-ui:latest "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$UI_REPO:latest"
+
+# Push
+docker push "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$GPU_REPO:latest"
+docker push "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$UI_REPO:latest"
+
+# Verify
+aws ecr describe-images --repository-name "$GPU_REPO" --region "$AWS_REGION"
+aws ecr describe-images --repository-name "$UI_REPO" --region "$AWS_REGION"
+
+```
+
+
+Create S3 bucket:
+```bash
+BUCKET_NAME="diffusion-inpaint-$(date +%s)-eu-west-1"
+aws s3 mb "s3://$BUCKET_NAME" --region "$AWS_REGION"
+echo "Bucket: $BUCKET_NAME"
+```
+
+
+Create AWS Batch (EC2 GPU compute env, g4dn.xlarge, min vCPU 0) + queue + job definition using diffusion-gpu.
+```bash
+Go to IAM -> Roles -> Create role
+Trust entity: AWS service → Batch
+Name: BatchServiceRole
+Add policy: AWSBatchServiceRolePolicy (auto-attached)
+Create.
+Repeat for EC2 instance role:
+Trust entity: EC2
+Name: BatchEC2InstanceRole
+Add policies: AmazonEC2ContainerServiceforEC2Role + custom S3 policy:
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject"],
+      "Resource": "arn:aws:s3:::BUCKET_NAME/*"
+    }
+  ]
+}
+```
+
+Create Compute Environment:
+```bash
+Open AWS Console → AWS Batch → Compute environments
+Click Create
+Type: Managed
+Compute environment type: EC2
+Name: diffusion-gpu-ce
+Instance types: add g4dn.xlarge
+Allocation strategy: Best fit (default is fine)
+Minimum vCPUs: 0
+Desired vCPUs: 0
+Maximum vCPUs: 4
+EC2 key pair: None (unless you want SSH)
+Instance role: BatchEC2InstanceRole (the EC2 role you created)
+Service role: AWSBatchServiceRole
+VPC/Subnets/Security group: pick defaults (public subnets are fine)
+Click Create compute environment
+```
+
+Create Job Queue:
+```bash
+AWS Batch → Job queues
+Click Create
+Name: diffusion-gpu-queue
+Priority: 1
+State: Enabled
+Compute environments: select diffusion-gpu-ce
+Name: inpaint-gpu-queue
+Click Create job queue
+```
+
+Create Job Definition:
+```bash
+AWS Batch → Job definitions
+Click Create
+Name: diffusion-gpu-job
+Type: Container
+Container image:
+<AWS_ACCOUNT_ID>.dkr.ecr.eu-west-1.amazonaws.com/diffusion-inpaint-gpu:latest
+vCPUs: 4
+Memory: 16000 (MB)
+GPUs: 1
+Command:
+python /src/diffusion_cells/infer_batch.py
+Job role: (optional) a role with S3 Get/Put for your bucket
+Click Create job definition
+```
