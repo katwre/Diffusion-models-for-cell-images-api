@@ -2,7 +2,7 @@
 
 <figure>
 <p align="center">
-  <img src="img/merged.gif" width="720">
+  <img src="img/demo_EC2.gif" width="720">
 </p>
   <figcaption align="center"><b>Figure.</b> Interactive diffusion-based inpainting results on an H&E image of a monocyte, illustrating reconstruction of masked regions while preserving the observed context.</figcaption>
 </figure>
@@ -31,9 +31,7 @@ If you're interested in other diffusion-based generative methods on H&E images, 
 
 🎨 Streamlit  
 🐳 Docker  
-☁️ AWS Batch (on-demand GPU jobs for diffusion model sampling/inference)  
-📦 AWS ECR
-
+☁️ AWS EC2 (single GPU instance)
 
 # Methods
 
@@ -134,124 +132,50 @@ docker run --rm -p 8501:8501 diffusion-inpaint
 ```
 
 
-### AWS Batch
+### AWS EC2 
 
-First push images to ECR. `Dockerfile` corresponds to UI container (Streamlit) for ECS Fargate (CPU, always on). `Dockerfile.gpu` corresponds to a worker container for AWS Batch (GPU, runs per inference job). Communication between them happens through AWS APIs + S3, not direct container-to-container calls.The reason behind it to make UI stay cheap/always-on (Fargate CPU), and GPU spins up only per request (Batch), so no idle GPU cost. Fargate is just the serverless compute engine that can run tasks for ECS or EKS.
+This runs the Streamlit app on a single GPU instance and serves it directly to users.
+
+1) Launch an EC2 GPU instance (g4dn.xlarge or g5.xlarge) with Ubuntu 22.04.
+2) Open inbound port 8501 in the security group:
+```text
+Go to the AWS EC2 Console → Security Groups.
+Select sg-0428c711c1b2dcde8 (launch-wizard-2).
+Go to the “Inbound rules” tab and click “Edit inbound rules”.
+Click "Add rule":
+Type: Custom TCP
+Port range: 8501
+Source: 0.0.0.0/0 (or your IP for restricted access)
+```
+3) SSH into the instance and run:
 
 ```bash
-docker build -f Dockerfile -t diffusion-inpaint-ui .
-docker build -f Dockerfile.gpu -t diffusion-inpaint-gpu .
-```
-A quick test of the UI image:
-```bash
-docker run --rm -p 8501:8501 diffusion-inpaint-ui
-```
+sudo apt update && sudo apt install -y git python3-pip python3-venv
+git clone https://github.com/katwre/Diffusion-models-for-cell-images-api.git
+cd Diffusion-models-for-cell-images-api
 
-Push images to a ECR repo:
-```bash
-# Set vars:
-AWS_REGION=eu-west-1
-AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-GPU_REPO=diffusion-inpaint-gpu
-UI_REPO=diffusion-inpaint-ui
+# Create and activate a virtual environment
+python3 -m venv venv
+source venv/bin/activate
+# Upgrade pip and install dependencies inside the venv
+pip3 install -U pip
+pip3 install streamlit streamlit-drawable-canvas-fix numpy pillow torch torchvision
 
-# Create repos
-aws ecr create-repository --repository-name "$GPU_REPO" --region "$AWS_REGION"
-aws ecr create-repository --repository-name "$UI_REPO" --region "$AWS_REGION"
+# Download trained models
+wget -O checkpoints.tar.gz "https://www.dropbox.com/scl/fi/1gm0ux4r0zq8b1qpe1b7c/checkpoints.tar.gz?rlkey=uh8kskedcwarztw0r6yn2yv8d&st=i58up58q&dl=1"
+tar -xzvf checkpoints.tar.gz
 
-# Login Docker to ECR:
-aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
-
-# Tag local images:
-docker tag diffusion-inpaint-gpu:latest "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$GPU_REPO:latest"
-docker tag diffusion-inpaint-ui:latest "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$UI_REPO:latest"
-
-# Push
-docker push "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$GPU_REPO:latest"
-docker push "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$UI_REPO:latest"
-
-# Verify
-aws ecr describe-images --repository-name "$GPU_REPO" --region "$AWS_REGION"
-aws ecr describe-images --repository-name "$UI_REPO" --region "$AWS_REGION"
-
+# Run the app
+streamlit run app/app.py --server.port 8501 --server.address 0.0.0.0
 ```
 
-
-Create S3 bucket:
-```bash
-BUCKET_NAME="diffusion-inpaint-$(date +%s)-eu-west-1"
-aws s3 mb "s3://$BUCKET_NAME" --region "$AWS_REGION"
-echo "Bucket: $BUCKET_NAME"
+Open the app at:
+```text
+http://<EC2_PUBLIC_IP>:8501
+```
+For example:
+```text
+http://3.252.126.9:8501
 ```
 
-
-Create AWS Batch (EC2 GPU compute env, g4dn.xlarge, min vCPU 0) + queue + job definition using diffusion-gpu.
-```bash
-Go to IAM -> Roles -> Create role
-Trust entity: AWS service → Batch
-Name: BatchServiceRole
-Add policy: AWSBatchServiceRolePolicy (auto-attached)
-Create.
-Repeat for EC2 instance role:
-Trust entity: EC2
-Name: BatchEC2InstanceRole
-Add policies: AmazonEC2ContainerServiceforEC2Role + custom S3 policy:
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": ["s3:GetObject", "s3:PutObject"],
-      "Resource": "arn:aws:s3:::BUCKET_NAME/*"
-    }
-  ]
-}
-```
-
-Create Compute Environment:
-```bash
-Open AWS Console → AWS Batch → Compute environments
-Click Create
-Type: Managed
-Compute environment type: EC2
-Name: diffusion-gpu-ce
-Instance types: add g4dn.xlarge
-Allocation strategy: Best fit (default is fine)
-Minimum vCPUs: 0
-Desired vCPUs: 0
-Maximum vCPUs: 4
-EC2 key pair: None (unless you want SSH)
-Instance role: BatchEC2InstanceRole (the EC2 role you created)
-Service role: AWSBatchServiceRole
-VPC/Subnets/Security group: pick defaults (public subnets are fine)
-Click Create compute environment
-```
-
-Create Job Queue:
-```bash
-AWS Batch → Job queues
-Click Create
-Name: diffusion-gpu-queue
-Priority: 1
-State: Enabled
-Compute environments: select diffusion-gpu-ce
-Name: inpaint-gpu-queue
-Click Create job queue
-```
-
-Create Job Definition:
-```bash
-AWS Batch → Job definitions
-Click Create
-Name: diffusion-gpu-job
-Type: Container
-Container image:
-<AWS_ACCOUNT_ID>.dkr.ecr.eu-west-1.amazonaws.com/diffusion-inpaint-gpu:latest
-vCPUs: 4
-Memory: 16000 (MB)
-GPUs: 1
-Command:
-python /src/diffusion_cells/infer_batch.py
-Job role: (optional) a role with S3 Get/Put for your bucket
-Click Create job definition
-```
+Cost control: stop or terminate the instance when not in use.
